@@ -19,11 +19,10 @@ import { CategorieService } from '../shared/categorie.service';
 import { AnnonceResponse, CategorieResponse } from '../shared/models';
 import { environment } from '../../environments/environment';
 
-// ⚠️ Ces constantes sont à remplacer par tes vraies valeurs Supabase
-// (Projet → API Keys dans le tableau de bord Supabase)
-const SUPABASE_URL = 'https://TON_PROJECT_ID.supabase.co';
-const SUPABASE_ANON_KEY = 'TA_CLE_ANON_SUPABASE';
-const BUCKET = 'souklink-photos';
+// ── Cloudinary (remplace Supabase Storage) ──────────────────
+const CLOUDINARY_CLOUD_NAME = 'dlcajfg6w'; // ex: dabcde123
+const CLOUDINARY_UPLOAD_PRESET = 'souklink_photos';
+const CLOUDINARY_UPLOAD_URL = `https://api.cloudinary.com/v1_1/dlcajfg6w/image/upload`;
 
 @Component({
   selector: 'app-creer-annonce',
@@ -182,43 +181,44 @@ export class CreerAnnonceComponent implements OnInit {
   }
 
   private async uploadFichiers(fichiers: File[]): Promise<void> {
-    if (this.photosUrls.length + fichiers.length > 6) {
-      this.erreur = 'Maximum 6 photos par annonce';
-      return;
-    }
-    this.uploadEnCours = true;
-    for (const fichier of fichiers) {
-      if (fichier.size > 5 * 1024 * 1024) {
-        this.erreur = `${fichier.name} dépasse 5 Mo`;
-        continue;
-      }
-      const extension = fichier.name.split('.').pop();
-      const nomFichier = `annonces/${Date.now()}_${Math.random().toString(36).slice(2)}.${extension}`;
-
-      try {
-        const reponse = await fetch(
-          `${SUPABASE_URL}/storage/v1/object/${BUCKET}/${nomFichier}`,
-          {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-              'Content-Type': fichier.type,
-            },
-            body: fichier,
-          }
-        );
-        if (reponse.ok) {
-          const urlPublique = `${SUPABASE_URL}/storage/v1/object/public/${BUCKET}/${nomFichier}`;
-          this.photosUrls.push(urlPublique);
-        } else {
-          this.erreur = 'Erreur lors de l\'upload de ' + fichier.name;
-        }
-      } catch {
-        this.erreur = 'Impossible de contacter Supabase Storage';
-      }
-    }
-    this.uploadEnCours = false;
+  if (this.photosUrls.length + fichiers.length > 6) {
+    this.erreur = 'Maximum 6 photos par annonce';
+    return;
   }
+  this.uploadEnCours = true;
+
+  for (const fichier of fichiers) {
+    if (fichier.size > 5 * 1024 * 1024) {
+      this.erreur = `${fichier.name} dépasse 5 Mo`;
+      continue;
+    }
+
+    // Cloudinary attend un FormData avec le fichier + le preset
+    const formData = new FormData();
+    formData.append('file', fichier);
+    formData.append('upload_preset', CLOUDINARY_UPLOAD_PRESET);
+
+    try {
+      const reponse = await fetch(CLOUDINARY_UPLOAD_URL, {
+        method: 'POST',
+        body: formData
+        // Pas de headers Authorization — c'est un preset "unsigned"
+      });
+
+      if (reponse.ok) {
+        const data = await reponse.json();
+        // Cloudinary retourne l'URL publique dans data.secure_url
+        this.photosUrls.push(data.secure_url);
+      } else {
+        this.erreur = 'Erreur lors de l\'upload de ' + fichier.name;
+      }
+    } catch {
+      this.erreur = 'Impossible de contacter Cloudinary';
+    }
+  }
+
+  this.uploadEnCours = false;
+}
 
   supprimerPhoto(index: number): void {
     this.photosUrls.splice(index, 1);
