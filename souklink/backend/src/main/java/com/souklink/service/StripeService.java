@@ -127,43 +127,74 @@ public class StripeService {
      * pourrait envoyer une fausse confirmation de paiement à cet endpoint public.
      */
     public void traiterWebhook(String payload, String signatureHeader) {
-        Event event;
-        try {
-            event = Webhook.constructEvent(payload, signatureHeader, webhookSecret);
-        } catch (SignatureVerificationException e) {
-            throw new AccesNonAutoriseException("Signature Stripe invalide");
-        }
-
-        if ("checkout.session.completed".equals(event.getType())) {
-            Session session = (Session) event.getDataObjectDeserializer().getObject().orElse(null);
-            if (session == null) {
-                return;
-            }
-
-            transactionRepository.findByStripeSessionId(session.getId()).ifPresent(transaction -> {
-                if (transaction.getStatutPaiement() == Transaction.StatutPaiement.EN_ATTENTE) {
-                    transaction.setStatutPaiement(Transaction.StatutPaiement.PAYE);
-                    transaction.setDatePaiement(LocalDateTime.now());
-                    transactionRepository.save(transaction);
-
-                    Annonce annonce = transaction.getAnnonce();
-                    annonce.setStatut(Annonce.StatutAnnonce.VENDU);
-                    annonceRepository.save(annonce);
-                }
-            });
-        } else if ("checkout.session.expired".equals(event.getType())) {
-            Session session = (Session) event.getDataObjectDeserializer().getObject().orElse(null);
-            if (session == null) {
-                return;
-            }
-            transactionRepository.findByStripeSessionId(session.getId()).ifPresent(transaction -> {
-                if (transaction.getStatutPaiement() == Transaction.StatutPaiement.EN_ATTENTE) {
-                    transaction.setStatutPaiement(Transaction.StatutPaiement.ANNULE);
-                    transactionRepository.save(transaction);
-                }
-            });
-        }
+    Event event;
+    try {
+        event = Webhook.constructEvent(payload, signatureHeader, webhookSecret);
+    } catch (SignatureVerificationException e) {
+        throw new AccesNonAutoriseException("Signature Stripe invalide");
     }
+
+    if ("checkout.session.completed".equals(event.getType())) {
+        Session session = (Session) event.getDataObjectDeserializer()
+                .getObject().orElse(null);
+        if (session == null) return;
+
+        // Chercher par session ID
+        Optional<Transaction> transactionOpt = 
+            transactionRepository.findByStripeSessionId(session.getId());
+
+        if (transactionOpt.isPresent()) {
+            // Transaction trouvée — mettre à jour
+            Transaction transaction = transactionOpt.get();
+            if (transaction.getStatutPaiement() == Transaction.StatutPaiement.EN_ATTENTE) {
+                transaction.setStatutPaiement(Transaction.StatutPaiement.PAYE);
+                transaction.setDatePaiement(LocalDateTime.now());
+                transactionRepository.save(transaction);
+
+                Annonce annonce = transaction.getAnnonce();
+                annonce.setStatut(Annonce.StatutAnnonce.VENDU);
+                annonceRepository.save(annonce);
+            }
+        } else {
+            // Transaction non trouvée — créer depuis les métadonnées Stripe
+            String annonceIdStr = session.getMetadata().get("annonceId");
+            String acheteurIdStr = session.getMetadata().get("acheteurId");
+
+            if (annonceIdStr != null && acheteurIdStr != null) {
+                Long annonceId = Long.parseLong(annonceIdStr);
+                Long acheteurId = Long.parseLong(acheteurIdStr);
+
+                annonceRepository.findById(annonceId).ifPresent(annonce -> {
+                    utilisateurRepository.findById(acheteurId).ifPresent(acheteur -> {
+                        Transaction nouvelle = new Transaction();
+                        nouvelle.setAnnonce(annonce);
+                        nouvelle.setAcheteur(acheteur);
+                        nouvelle.setMontant(annonce.getPrix());
+                        nouvelle.setStatutPaiement(Transaction.StatutPaiement.PAYE);
+                        nouvelle.setStripeSessionId(session.getId());
+                        nouvelle.setDatePaiement(LocalDateTime.now());
+                        transactionRepository.save(nouvelle);
+
+                        annonce.setStatut(Annonce.StatutAnnonce.VENDU);
+                        annonceRepository.save(annonce);
+                    });
+                });
+            }
+        }
+    } else if ("checkout.session.expired".equals(event.getType())) {
+        Session session = (Session) event.getDataObjectDeserializer()
+                .getObject().orElse(null);
+        if (session == null) return;
+
+        transactionRepository.findByStripeSessionId(session.getId())
+                .ifPresent(transaction -> {
+                    if (transaction.getStatutPaiement() == Transaction.StatutPaiement.EN_ATTENTE) {
+                        transaction.setStatutPaiement(Transaction.StatutPaiement.ANNULE);
+                        transactionRepository.save(transaction);
+                    }
+                });
+    }
+}
 
     public List<TransactionResponse> listerPourAcheteur(Long acheteurId) {
         return transactionRepository.findByAcheteurIdOrderByDateCreationDesc(acheteurId)
