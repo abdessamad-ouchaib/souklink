@@ -141,36 +141,23 @@ public class StripeService {
         }
 
         if ("checkout.session.completed".equals(event.getType())) {
+    Session session = (Session) event.getDataObjectDeserializer()
+            .getObject().orElse(null);
+    if (session == null) return;
 
-            Session session = (Session) event.getDataObjectDeserializer().getObject().orElse(null);
-
-            if (session == null) {
-
-                return;
-
-            }
-
-            transactionRepository.findByStripeSessionId(session.getId()).ifPresent(transaction -> {
-
+    transactionRepository.findByStripeSessionId(session.getId())
+            .ifPresent(transaction -> {
                 if (transaction.getStatutPaiement() == Transaction.StatutPaiement.EN_ATTENTE) {
-
                     transaction.setStatutPaiement(Transaction.StatutPaiement.PAYE);
-
                     transaction.setDatePaiement(LocalDateTime.now());
-
                     transactionRepository.save(transaction);
 
                     Annonce annonce = transaction.getAnnonce();
-
                     annonce.setStatut(Annonce.StatutAnnonce.VENDU);
-
                     annonceRepository.save(annonce);
-
                 }
-
             });
-
-        } else if ("checkout.session.expired".equals(event.getType())) {
+} else if ("checkout.session.expired".equals(event.getType())) {
 
             Session session = (Session) event.getDataObjectDeserializer().getObject().orElse(null);
 
